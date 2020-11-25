@@ -1,3 +1,4 @@
+from typing import Tuple
 
 from nintendo.baas import BAASClient
 from nintendo.dauth import DAuthClient
@@ -41,23 +42,25 @@ CODE = "ABCDE" # Dodo code
 HOST = "g%08x-lp1.s.n.srv.nintendo.net" %ACNH.GAME_SERVER_ID
 PORT = 443
 
-
-async def main():
+async def authorize() -> Tuple[int, authentication.AuthenticationInfo]:
 	keys = KeySet.load(PATH_KEYS)
 	info = ProdInfo(keys, PATH_PRODINFO)
 	
-	with open(PATH_TICKET, "rb") as f:
-		ticket = f.read()
-	
+	# This information is unique to each switch and never changes
+	# If your device is ever banned, it's these keys that are revoked.
 	cert = info.get_tls_cert()
 	pkey = info.get_tls_key()
 	
+	# get a device authentication token from the dauth server
+	# device_token lasts ~24 hours
 	dauth = DAuthClient(keys)
 	dauth.set_certificate(cert, pkey)
 	dauth.set_system_version(SYSTEM_VERSION)
 	response = await dauth.device_token(dauth.BAAS)
 	device_token = response["device_auth_token"]
 	
+	# get application-specific authentication token from the AAuth server
+	# app_token lasts ~24 hours
 	aauth = AAuthClient()
 	aauth.set_system_version(SYSTEM_VERSION)
 	response = await aauth.auth_digital(
@@ -66,9 +69,11 @@ async def main():
 	)
 	app_token = response["application_auth_token"]
 	
+	# combine device authentication token with the user's NS Online profile information
+	# to get their BAAS access token
+	# access_token lasts 
 	baas = BAASClient()
 	baas.set_system_version(SYSTEM_VERSION)
-	
 	response = await baas.authenticate(device_token)
 	access_token = response["accessToken"]
 	
@@ -82,6 +87,12 @@ async def main():
 	auth_info.token = id_token
 	auth_info.ngs_version = 4 #Switch
 	auth_info.token_type = 2
+	
+	return user_id, auth_info
+
+
+async def main():
+	user_id, auth_info = await authorize()
 
 	s = settings.load("switch")
 	s.configure(ACNH.ACCESS_KEY, ACNH.NEX_VERSION, ACNH.CLIENT_VERSION)
@@ -106,16 +117,17 @@ async def main():
 			param.codeword = CODE
 
 			sessions = await mm.browse_matchmake_session_no_holder_no_result_range(param)
-			if not sessions:
+			if sessions:
 				print("\nNo island found for '%s'\n" %CODE)
-			else:
-				session = sessions[0]
-				data = session.application_data
-				print("\nFound island:")
-				print("\tId:", session.id)
-				print("\tActive players:", session.participation_count)
-				print("\tIsland name:", data[12:32].decode("utf16").rstrip("\0"))
-				print("\tHost name:", data[40:60].decode("utf16").rstrip("\0"))
-				print()
+				return
+
+			session = sessions[0]
+			data = session.application_data
+			print("\nFound island:")
+			print("\tId:", session.id)
+			print("\tActive players:", session.participation_count)
+			print("\tIsland name:", data[12:32].decode("utf16").rstrip("\0"))
+			print("\tHost name:", data[40:60].decode("utf16").rstrip("\0"))
+			print()
 
 anyio.run(main)
